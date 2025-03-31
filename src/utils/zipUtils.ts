@@ -94,6 +94,8 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
   // Create a map for faster lookups
   const fileMap = new Map<string, ExtractedFile>();
   
+  console.log('Setting up ZIP resource loader with files:', extractedFiles.map(f => f.path));
+  
   // Add multiple ways to look up each file
   extractedFiles.forEach(file => {
     // By filename (case insensitive)
@@ -114,9 +116,10 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
       fileMap.set(baseName, file);
     }
   });
-  
-  // Log available files for debugging
-  console.log('ZIP contents:', extractedFiles.map(f => f.path));
+
+  // Store bin files for fallback
+  const binFiles = extractedFiles.filter(f => f.name.toLowerCase().endsWith('.bin'));
+  console.log('Available bin files:', binFiles.map(f => f.path));
   
   return async (url: string): Promise<ArrayBuffer | string> => {
     // Normalize the URL (remove query parameters, normalize directory separators)
@@ -126,7 +129,7 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
     // Extract just the filename without path
     const filename = normalizedUrl.split('/').pop() || normalizedUrl;
     
-    console.log(`Looking for: ${normalizedUrl} or ${filename}`);
+    console.log(`Looking for: "${normalizedUrl}" or filename: "${filename}"`);
     
     // Try different ways to find the file
     let file = fileMap.get(normalizedUrl) || 
@@ -135,11 +138,31 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                extractedFiles.find(f => f.path.toLowerCase().endsWith('/' + filename)) ||
                extractedFiles.find(f => f.name.toLowerCase() === filename);
     
-    // Special check for buffer files like scene.bin which are often referenced with different paths
+    // Special handling for bin files - crucial for scene.bin references
     if (!file && filename.endsWith('.bin')) {
-      file = extractedFiles.find(f => f.name.toLowerCase().endsWith('.bin'));
-      if (file) {
-        console.log(`Found buffer file by extension: ${file.path}`);
+      console.log(`Binary file "${filename}" not found directly, searching for alternatives...`);
+      
+      // First try to find a bin file with exactly this name (case insensitive)
+      file = extractedFiles.find(f => f.name.toLowerCase() === filename.toLowerCase());
+      
+      // If not found, try to match any bin file by examining the path
+      if (!file) {
+        // Look for bin files that might match by path segments
+        const potentialMatches = binFiles.filter(f => {
+          // Check if any part of the path matches parts of the requested URL
+          const urlParts = normalizedUrl.split('/');
+          const fileParts = f.path.toLowerCase().split('/');
+          return urlParts.some(part => fileParts.includes(part.toLowerCase()));
+        });
+        
+        if (potentialMatches.length > 0) {
+          file = potentialMatches[0];
+          console.log(`Found potential bin match: ${file.path}`);
+        } else if (binFiles.length > 0) {
+          // Last resort - use the first bin file we found
+          file = binFiles[0];
+          console.log(`Using fallback bin file: ${file.path}`);
+        }
       }
     }
     
@@ -150,7 +173,14 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
       if (file.isGltf && file.name.endsWith('.gltf')) {
         const textDecoder = new TextDecoder('utf-8');
         const jsonContent = textDecoder.decode(file.data);
-        let gltfJson = JSON.parse(jsonContent);
+        let gltfJson;
+        
+        try {
+          gltfJson = JSON.parse(jsonContent);
+        } catch (e) {
+          console.error('Failed to parse GLTF JSON:', e);
+          throw new Error('Failed to parse GLTF JSON');
+        }
         
         // Get the directory path of the gltf file
         const gltfDir = file.path.includes('/') 
@@ -171,7 +201,8 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                 extractedFiles.find(f => 
                   f.path.toLowerCase() === imagePath.toLowerCase() || 
                   f.path.toLowerCase() === absoluteImagePath.toLowerCase() ||
-                  f.path.toLowerCase().endsWith('/' + imagePath.toLowerCase())
+                  f.path.toLowerCase().endsWith('/' + imagePath.toLowerCase()) ||
+                  f.name.toLowerCase() === imagePath.toLowerCase()
                 );
               
               if (imageFile) {
@@ -186,13 +217,16 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
         
         // Process buffers to use object URLs
         if (gltfJson.buffers) {
-          gltfJson.buffers.forEach((buffer: any) => {
+          gltfJson.buffers.forEach((buffer: any, index: number) => {
             if (buffer.uri) {
               // Try different ways to find the buffer
               const bufferPath = buffer.uri;
               const absoluteBufferPath = gltfDir + bufferPath;
               
-              const bufferFile = 
+              console.log(`Looking for buffer: "${bufferPath}" or "${absoluteBufferPath}"`);
+              
+              // Try many different ways to find the buffer file
+              let bufferFile = 
                 fileMap.get(bufferPath.toLowerCase()) || 
                 fileMap.get(absoluteBufferPath.toLowerCase()) ||
                 extractedFiles.find(f => 
@@ -202,18 +236,26 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                   f.name.toLowerCase() === bufferPath.toLowerCase()
                 );
               
+              // If not found, try to use any .bin file as a fallback
+              if (!bufferFile) {
+                console.warn(`Buffer not found: ${bufferPath}. Trying fallbacks...`);
+                
+                // Try just using the filename part
+                const bufferFilename = bufferPath.split('/').pop()!.toLowerCase();
+                bufferFile = extractedFiles.find(f => f.name.toLowerCase() === bufferFilename);
+                
+                // Last resort - use any .bin file we can find
+                if (!bufferFile && binFiles.length > 0) {
+                  bufferFile = binFiles[0];
+                  console.log(`Using fallback buffer: ${bufferFile.path} for ${bufferPath}`);
+                }
+              }
+              
               if (bufferFile) {
                 console.log(`Rewrote buffer ${bufferPath} to ${bufferFile.url.href}`);
                 buffer.uri = bufferFile.url.href;
               } else {
-                console.warn(`Buffer not found: ${bufferPath} (absolute: ${absoluteBufferPath})`);
-                
-                // Last resort: check if there's any .bin file that could be this buffer
-                const anyBinFile = extractedFiles.find(f => f.name.toLowerCase().endsWith('.bin'));
-                if (anyBinFile) {
-                  console.log(`Using alternative bin file: ${anyBinFile.path}`);
-                  buffer.uri = anyBinFile.url.href;
-                }
+                console.error(`CRITICAL: No buffer file found for ${bufferPath}`);
               }
             }
           });
@@ -225,14 +267,78 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
       return file.data;
     }
     
-    // If not found in ZIP, fetch from network
+    // If not found in ZIP, try to fetch from network as a last resort
     console.log(`File not found in ZIP, fetching from URL: ${url}`);
     try {
+      // Handle blob URLs (for files we've already processed)
+      if (url.startsWith('blob:')) {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return await response.arrayBuffer();
+      }
+      
+      console.warn(`Attempting to fetch from external URL: ${url} - this may fail due to CORS`);
       const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       return await response.arrayBuffer();
     } catch (error) {
       console.error(`Error fetching ${url}:`, error);
       throw new Error(`Failed to load ${url}: ${error}`);
     }
+  };
+}
+
+export function setupZipFileLoader(zipFiles: ExtractedFile[]): () => void {
+  // Save the original FileLoader.prototype.load method
+  const originalLoad = THREE.FileLoader.prototype.load;
+  const customResourceLoader = createZipResourceLoader(zipFiles);
+  
+  // Override the load method
+  THREE.FileLoader.prototype.load = function(
+    url: string, 
+    onLoad?: ((response: string | ArrayBuffer) => void), 
+    onProgress?: ((event: ProgressEvent) => void),
+    onError?: ((event: ErrorEvent) => void)
+  ): any {
+    if (!url) return null;
+    
+    // Use the original loader for blob URLs (we've already processed these)
+    if (url.startsWith('blob:')) {
+      return originalLoad.call(
+        this, 
+        url, 
+        onLoad, 
+        onProgress, 
+        onError
+      );
+    }
+    
+    console.log(`ZIP loader intercepting: ${url}`);
+    
+    if (onLoad) {
+      customResourceLoader(url)
+        .then(onLoad)
+        .catch((error) => {
+          console.error(`ZIP loader failed for ${url}:`, error);
+          if (onError) {
+            const errorEvent = new ErrorEvent('error', { error });
+            onError(errorEvent);
+          }
+        });
+      
+      return null;
+    } else {
+      return originalLoad.call(this, url, onLoad, onProgress, onError);
+    }
+  };
+  
+  // Return a cleanup function
+  return () => {
+    console.log("Restoring original THREE.FileLoader");
+    THREE.FileLoader.prototype.load = originalLoad;
   };
 }

@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { 
@@ -20,10 +21,10 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { useToast } from '@/components/ui/use-toast';
+import { useToast } from '@/hooks/use-toast';
 import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive } from 'lucide-react';
 import * as THREE from 'three';
-import { extractZipFile, createZipResourceLoader, ExtractedFile } from '@/utils/zipUtils';
+import { extractZipFile, createZipResourceLoader, ExtractedFile, setupZipFileLoader } from '@/utils/zipUtils';
 
 const PRESET_MODELS = [
   {
@@ -122,71 +123,29 @@ const KeyboardControls = new KeyboardControlsManager();
 useGLTF.preload(PRESET_MODELS[0].url);
 
 function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipFiles?: ExtractedFile[] }) {
-  const [customLoader, setCustomLoader] = useState<boolean>(false);
   const modelRef = useRef<THREE.Group>(null);
-  const originalFileLoader = useRef<typeof THREE.FileLoader.prototype.load | null>(null);
+  const [cleanupLoader, setCleanupLoader] = useState<(() => void) | null>(null);
   
+  // Set up the ZIP file loader when needed
   useEffect(() => {
     if (zipFiles && zipFiles.length > 0) {
       console.log("Setting up custom loader for ZIP files");
+      const cleanup = setupZipFileLoader(zipFiles);
+      setCleanupLoader(() => cleanup);
       
-      if (!originalFileLoader.current) {
-        originalFileLoader.current = THREE.FileLoader.prototype.load;
-      }
-      
-      const customResourceLoader = createZipResourceLoader(zipFiles);
-      
-      THREE.FileLoader.prototype.load = function(
-        url: string, 
-        onLoad?: ((response: string | ArrayBuffer) => void), 
-        onProgress?: ((event: ProgressEvent) => void),
-        onError?: ((event: ErrorEvent) => void)
-      ): any {
-        if (!url) return null;
-        
-        if (url.startsWith('blob:')) {
-          return originalFileLoader.current?.call(
-            this, 
-            url, 
-            onLoad, 
-            onProgress, 
-            onError
-          );
-        }
-        
-        console.log(`Custom loader intercepting: ${url}`);
-        
-        if (onLoad) {
-          customResourceLoader(url)
-            .then(onLoad)
-            .catch((error) => {
-              console.error(`Custom loader failed for ${url}:`, error);
-              if (onError) {
-                const errorEvent = new ErrorEvent('error', { error });
-                onError(errorEvent);
-              }
-            });
-          
-          return null;
-        } else {
-          return originalFileLoader.current?.call(this, url, onLoad, onProgress, onError);
-        }
+      return () => {
+        cleanup();
+        setCleanupLoader(null);
       };
-      
-      setCustomLoader(true);
     }
-    
-    return () => {
-      if (customLoader && originalFileLoader.current) {
-        console.log("Restoring original FileLoader");
-        THREE.FileLoader.prototype.load = originalFileLoader.current;
-        setCustomLoader(false);
-      }
-    };
   }, [zipFiles]);
   
-  const key = useMemo(() => zipFiles ? Math.random().toString() : url, [url, zipFiles]);
+  // Generate a new key every time the URL or zip files change to force remounting
+  const key = useMemo(() => (
+    `model-${url}-${zipFiles ? 'zip-' + Math.random().toString() : ''}`
+  ), [url, zipFiles]);
   
+  // Load the model
   const gltfResult = useGLTF(url);
   const clone = useMemo(() => gltfResult.scene.clone(), [gltfResult.scene]);
   
@@ -205,6 +164,15 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
       }
     }
   });
+  
+  // Clean up ObjectURLs when component unmounts
+  useEffect(() => {
+    return () => {
+      if (cleanupLoader) {
+        cleanupLoader();
+      }
+    };
+  }, [cleanupLoader]);
   
   return (
     <primitive 
@@ -234,6 +202,7 @@ const GltfViewer = () => {
   const zipInputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [zipFiles, setZipFiles] = useState<ExtractedFile[] | null>(null);
+  const [modelKey, setModelKey] = useState<string>("initial");
   
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -267,6 +236,12 @@ const GltfViewer = () => {
     }
 
     console.log("Processing ZIP file:", file.name);
+    
+    // Clear previous state first
+    setZipFiles(null);
+    setModelUrl("");
+    
+    // Extract the ZIP contents
     const extractedFiles = await extractZipFile(file);
     if (!extractedFiles) return;
 
@@ -280,17 +255,20 @@ const GltfViewer = () => {
       return;
     }
 
+    // Set the ZIP files first
     setZipFiles(extractedFiles);
     
+    // Force a re-render of the model with a delay to ensure files are processed
     setTimeout(() => {
       setModelUrl(gltfFile.url.href);
       setModelInfo(`Modelo desde ZIP: ${file.name} - ${gltfFile.name}`);
+      setModelKey(`zip-${Math.random()}`); // Force remount of the model component
       
       toast({
         title: "Modelo ZIP cargado",
         description: `Se encontraron ${extractedFiles.length} archivos, usando ${gltfFile.name}`,
       });
-    }, 300);
+    }, 100);
     
   }, [toast]);
   
@@ -309,11 +287,13 @@ const GltfViewer = () => {
       return;
     }
     
+    // Clear previous ZIP files
     setZipFiles(null);
     
     const url = URL.createObjectURL(file);
     setModelUrl(url);
     setModelInfo(`Modelo: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+    setModelKey(`file-${Math.random()}`); // Force remount
     
     toast({
       title: "Modelo cargado",
@@ -335,6 +315,7 @@ const GltfViewer = () => {
       setZipFiles(null);
       setModelUrl(urlInput);
       setModelInfo(`Modelo: URL externa`);
+      setModelKey(`url-${Math.random()}`); // Force remount
       toast({
         title: "Modelo cargado",
         description: "El modelo se ha cargado desde la URL",
@@ -352,6 +333,7 @@ const GltfViewer = () => {
     setZipFiles(null);
     setModelUrl(model.url);
     setModelInfo(`Modelo: ${model.name}`);
+    setModelKey(`preset-${Math.random()}`); // Force remount
     toast({
       title: "Modelo cargado",
       description: `${model.name} se ha cargado correctamente`,
@@ -359,6 +341,15 @@ const GltfViewer = () => {
   }, [toast]);
   
   const resetViewer = useCallback(() => {
+    // Clean up any previous object URLs
+    if (zipFiles) {
+      zipFiles.forEach(file => {
+        if (file.url) {
+          URL.revokeObjectURL(file.url.href);
+        }
+      });
+    }
+    
     setZipFiles(null);
     setModelUrl(PRESET_MODELS[0].url);
     setModelInfo(`Modelo: ${PRESET_MODELS[0].name}`);
@@ -369,13 +360,15 @@ const GltfViewer = () => {
     setShowShadows(true);
     setAutoRotate(false);
     setScale(1);
+    setModelKey(`reset-${Math.random()}`); // Force remount
     
     toast({
       title: "Visor reiniciado",
       description: "Todas las configuraciones se han restablecido",
     });
-  }, [toast]);
+  }, [toast, zipFiles]);
   
+  // Cleanup effect
   useEffect(() => {
     return () => {
       KeyboardControls.cleanup();
@@ -408,11 +401,18 @@ const GltfViewer = () => {
         style={{ background: backgroundColor }}
         camera={{ position: [5, 5, 5], fov: 50 }}
         shadows
+        key={modelKey} // Force canvas remount when model changes
       >
         <Suspense fallback={<LoadingIndicator />}>
           <Environment preset={environmentPreset as any} background={false} />
           
-          <Model url={modelUrl} scale={scale} zipFiles={zipFiles || undefined} />
+          {modelUrl && (
+            <Model 
+              url={modelUrl} 
+              scale={scale} 
+              zipFiles={zipFiles || undefined}
+            />
+          )}
           
           <CameraController />
           
