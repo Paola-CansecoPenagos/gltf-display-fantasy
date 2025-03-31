@@ -1,6 +1,8 @@
 
 import JSZip from 'jszip';
 import { toast } from '@/hooks/use-toast';
+import { Loader } from 'three';
+import { GLTF } from 'three/examples/jsm/loaders/GLTFLoader';
 
 export interface ExtractedFile {
   name: string;
@@ -88,7 +90,7 @@ export async function extractZipFile(file: File): Promise<ExtractedFile[] | null
 }
 
 // Create a custom loader for Three.js that loads resources from the extracted ZIP
-export function createZipResourceLoader(extractedFiles: ExtractedFile[]): ((url: string) => Promise<any>) {
+export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: string) => Promise<ArrayBuffer | string> {
   // Create a map for faster lookups
   const fileMap = new Map<string, ExtractedFile>();
   extractedFiles.forEach(file => {

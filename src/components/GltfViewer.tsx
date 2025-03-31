@@ -25,6 +25,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive } from 'lucide-react';
 import * as THREE from 'three';
 import { extractZipFile, createZipResourceLoader, ExtractedFile } from '@/utils/zipUtils';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 
 const PRESET_MODELS = [
   {
@@ -94,10 +95,36 @@ function CameraController() {
 
 // Modified Model component to support custom loaders for ZIP files
 function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipFiles?: ExtractedFile[] }) {
-  const { scene } = useGLTF(url, zipFiles ? createZipResourceLoader(zipFiles) : undefined);
+  const gltfResult = useGLTF(url, zipFiles ? true : undefined);
   const modelRef = useRef<THREE.Group>();
   
-  const clone = useMemo(() => scene.clone(), [scene]);
+  // Setup custom fetch if we have ZIP files
+  useEffect(() => {
+    if (zipFiles) {
+      // Override the loader's fileLoader with our custom one
+      const loader = useGLTF.getLoader();
+      const originalLoad = loader.fileLoader.load;
+      
+      const customResourceLoader = createZipResourceLoader(zipFiles);
+      
+      loader.fileLoader.load = function(url: string, onLoad: (response: string | ArrayBuffer) => void, onProgress?: (event: ProgressEvent) => void, onError?: (event: ErrorEvent) => void) {
+        customResourceLoader(url)
+          .then(onLoad)
+          .catch((error) => {
+            if (onError) onError(new ErrorEvent('error', { error }));
+          });
+          
+        return null as any; // The fileLoader.load expects a return value, but we're handling it asynchronously
+      };
+      
+      return () => {
+        // Reset the fileLoader when component unmounts
+        loader.fileLoader.load = originalLoad;
+      };
+    }
+  }, [zipFiles, url]);
+  
+  const clone = useMemo(() => gltfResult.scene.clone(), [gltfResult.scene]);
   
   useFrame(({ clock }) => {
     if (modelRef.current) {
