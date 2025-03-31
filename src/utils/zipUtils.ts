@@ -122,6 +122,12 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
   const binFiles = extractedFiles.filter(f => f.name.toLowerCase().endsWith('.bin'));
   console.log('Available bin files:', binFiles.map(f => f.path));
   
+  // Create a specific mapping for "scene.bin" since this is commonly used
+  if (!fileMap.has('scene.bin') && binFiles.length > 0) {
+    console.log(`No direct 'scene.bin' found, setting up main binary file as fallback`);
+    fileMap.set('scene.bin', binFiles[0]);
+  }
+  
   return async (url: string): Promise<ArrayBuffer | string> => {
     // Normalize the URL (remove query parameters, normalize directory separators)
     let normalizedUrl = url.split('?')[0].toLowerCase();
@@ -145,6 +151,12 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
       
       // First try to find a bin file with exactly this name (case insensitive)
       file = extractedFiles.find(f => f.name.toLowerCase() === filename.toLowerCase());
+      
+      // Direct lookup for "scene.bin" which is commonly used
+      if (filename === 'scene.bin' && fileMap.has('scene.bin')) {
+        console.log('Using mapped scene.bin fallback');
+        file = fileMap.get('scene.bin');
+      }
       
       // If not found, try to match any bin file by examining the path
       if (!file) {
@@ -237,7 +249,13 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                   f.name.toLowerCase() === bufferPath.toLowerCase()
                 );
               
-              // If not found, try to use any .bin file as a fallback
+              // If not found and it's scene.bin, try direct mapping
+              if (!bufferFile && bufferPath === 'scene.bin' && fileMap.has('scene.bin')) {
+                bufferFile = fileMap.get('scene.bin');
+                console.log(`Using mapped scene.bin for buffer: ${bufferFile?.path}`);
+              }
+              
+              // If still not found, try more fallbacks
               if (!bufferFile) {
                 console.warn(`Buffer not found: ${bufferPath}. Trying fallbacks...`);
                 
@@ -249,6 +267,13 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                 if (!bufferFile && binFiles.length > 0) {
                   bufferFile = binFiles[0];
                   console.log(`Using fallback buffer: ${bufferFile.path} for ${bufferPath}`);
+                  
+                  // IMPORTANT: Also add this to the map for future lookups
+                  fileMap.set(bufferPath.toLowerCase(), bufferFile);
+                  if (bufferPath.includes('/')) {
+                    const bufferFilename = bufferPath.split('/').pop()!.toLowerCase();
+                    fileMap.set(bufferFilename, bufferFile);
+                  }
                 }
               }
               

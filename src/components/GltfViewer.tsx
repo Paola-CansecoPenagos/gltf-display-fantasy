@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { 
@@ -126,28 +125,38 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
   const modelRef = useRef<THREE.Group>(null);
   const [cleanupLoader, setCleanupLoader] = useState<(() => void) | null>(null);
   
-  // Set up the ZIP file loader when needed
   useEffect(() => {
     if (zipFiles && zipFiles.length > 0) {
       console.log("Setting up custom loader for ZIP files");
+      
       const cleanup = setupZipFileLoader(zipFiles);
       setCleanupLoader(() => cleanup);
       
       return () => {
+        console.log("Cleaning up custom ZIP loader");
         cleanup();
         setCleanupLoader(null);
       };
     }
   }, [zipFiles]);
   
-  // Generate a new key every time the URL or zip files change to force remounting
   const key = useMemo(() => (
     `model-${url}-${zipFiles ? 'zip-' + Math.random().toString() : ''}`
   ), [url, zipFiles]);
   
-  // Load the model
-  const gltfResult = useGLTF(url);
-  const clone = useMemo(() => gltfResult.scene.clone(), [gltfResult.scene]);
+  const { scene, nodes, materials } = useGLTF(url, true, true, 
+    (xhr) => {
+      console.log(`Loading progress: ${(xhr.loaded / xhr.total) * 100}% loaded`);
+    },
+    (error) => {
+      console.error("Error loading model:", error);
+    }
+  );
+  
+  const clone = useMemo(() => {
+    console.log("Cloning model scene");
+    return scene.clone();
+  }, [scene]);
   
   useFrame(({ clock }) => {
     if (modelRef.current) {
@@ -165,7 +174,6 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
     }
   });
   
-  // Clean up ObjectURLs when component unmounts
   useEffect(() => {
     return () => {
       if (cleanupLoader) {
@@ -237,11 +245,9 @@ const GltfViewer = () => {
 
     console.log("Processing ZIP file:", file.name);
     
-    // Clear previous state first
     setZipFiles(null);
     setModelUrl("");
     
-    // Extract the ZIP contents
     const extractedFiles = await extractZipFile(file);
     if (!extractedFiles) return;
 
@@ -255,10 +261,11 @@ const GltfViewer = () => {
       return;
     }
 
-    // Set the ZIP files first
+    const binFiles = extractedFiles.filter(f => f.name.toLowerCase().endsWith('.bin'));
+    console.log("Found binary files:", binFiles.map(f => f.name));
+    
     setZipFiles(extractedFiles);
     
-    // Force a re-render of the model with a delay to ensure files are processed
     setTimeout(() => {
       setModelUrl(gltfFile.url.href);
       setModelInfo(`Modelo desde ZIP: ${file.name} - ${gltfFile.name}`);
@@ -287,7 +294,6 @@ const GltfViewer = () => {
       return;
     }
     
-    // Clear previous ZIP files
     setZipFiles(null);
     
     const url = URL.createObjectURL(file);
@@ -341,7 +347,6 @@ const GltfViewer = () => {
   }, [toast]);
   
   const resetViewer = useCallback(() => {
-    // Clean up any previous object URLs
     if (zipFiles) {
       zipFiles.forEach(file => {
         if (file.url) {
@@ -368,7 +373,6 @@ const GltfViewer = () => {
     });
   }, [toast, zipFiles]);
   
-  // Cleanup effect
   useEffect(() => {
     return () => {
       KeyboardControls.cleanup();
