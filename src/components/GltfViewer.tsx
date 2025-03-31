@@ -122,11 +122,12 @@ const KeyboardControls = new KeyboardControlsManager();
 useGLTF.preload(PRESET_MODELS[0].url);
 
 function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipFiles?: ExtractedFile[] }) {
-  const gltfResult = useGLTF(url);
-  const modelRef = useRef<THREE.Group>();
+  const [customLoader, setCustomLoader] = useState<boolean>(false);
+  const modelRef = useRef<THREE.Group>(null);
   
   useEffect(() => {
     if (zipFiles) {
+      const originalFileLoader = THREE.FileLoader.prototype.load;
       const customResourceLoader = createZipResourceLoader(zipFiles);
       
       THREE.FileLoader.prototype.load = function(
@@ -135,25 +136,47 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
         onProgress?: ((event: ProgressEvent) => void),
         onError?: ((event: ErrorEvent) => void)
       ): any {
+        if (!url) return null;
+        
+        if (url.startsWith('blob:')) {
+          return originalFileLoader.call(
+            this, 
+            url, 
+            onLoad, 
+            onProgress, 
+            onError
+          );
+        }
+        
         if (onLoad) {
           customResourceLoader(url)
             .then(onLoad)
             .catch((error) => {
-              if (onError) onError(new ErrorEvent('error', { error }));
+              console.error(`Custom loader failed for ${url}:`, error);
+              if (onError) {
+                const errorEvent = new ErrorEvent('error', { error });
+                onError(errorEvent);
+              }
             });
           
           return null;
         } else {
-          return THREE.FileLoader.prototype.load.call(this, url);
+          return originalFileLoader.call(this, url);
         }
       };
       
+      setCustomLoader(true);
+      
       return () => {
-        THREE.FileLoader.prototype.load = THREE.FileLoader.prototype.load;
+        if (customLoader) {
+          THREE.FileLoader.prototype.load = originalFileLoader;
+          setCustomLoader(false);
+        }
       };
     }
-  }, [zipFiles, url]);
+  }, [zipFiles]);
   
+  const gltfResult = useGLTF(url);
   const clone = useMemo(() => gltfResult.scene.clone(), [gltfResult.scene]);
   
   useFrame(({ clock }) => {
@@ -231,6 +254,7 @@ const GltfViewer = () => {
       return;
     }
 
+    console.log("Processing ZIP file:", file.name);
     const extractedFiles = await extractZipFile(file);
     if (!extractedFiles) return;
 
@@ -245,13 +269,17 @@ const GltfViewer = () => {
     }
 
     setZipFiles(extractedFiles);
-    setModelUrl(gltfFile.url.href);
-    setModelInfo(`Modelo desde ZIP: ${file.name} - ${gltfFile.name}`);
     
-    toast({
-      title: "Modelo ZIP cargado",
-      description: `Se encontraron ${extractedFiles.length} archivos, usando ${gltfFile.name}`,
-    });
+    setTimeout(() => {
+      setModelUrl(gltfFile.url.href);
+      setModelInfo(`Modelo desde ZIP: ${file.name} - ${gltfFile.name}`);
+      
+      toast({
+        title: "Modelo ZIP cargado",
+        description: `Se encontraron ${extractedFiles.length} archivos, usando ${gltfFile.name}`,
+      });
+    }, 100);
+    
   }, [toast]);
   
   const handleFiles = useCallback((file: File) => {

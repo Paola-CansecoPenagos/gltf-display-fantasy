@@ -1,3 +1,4 @@
+
 import JSZip from 'jszip';
 import { toast } from '@/hooks/use-toast';
 
@@ -47,6 +48,8 @@ export async function extractZipFile(file: File): Promise<ExtractedFile[] | null
           mimeType = 'model/gltf-binary';
         } else if (['png', 'jpg', 'jpeg', 'webp'].includes(extension || '')) {
           mimeType = `image/${extension}`;
+        } else if (extension === 'bin') {
+          mimeType = 'application/octet-stream';
         }
         
         extractedFiles.push({
@@ -90,31 +93,76 @@ export async function extractZipFile(file: File): Promise<ExtractedFile[] | null
 export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: string) => Promise<ArrayBuffer | string> {
   // Create a map for faster lookups
   const fileMap = new Map<string, ExtractedFile>();
+  
+  // Add multiple ways to look up each file
   extractedFiles.forEach(file => {
-    fileMap.set(file.name, file);
-    fileMap.set(file.path, file);
+    // By filename
+    fileMap.set(file.name.toLowerCase(), file);
+    
+    // By full path
+    fileMap.set(file.path.toLowerCase(), file);
+    
+    // By path without leading directory
+    if (file.path.includes('/')) {
+      const pathWithoutDir = file.path.substring(file.path.indexOf('/') + 1);
+      fileMap.set(pathWithoutDir.toLowerCase(), file);
+    }
   });
   
+  // Debug: Log all available files
+  console.log('ZIP contents:', extractedFiles.map(f => f.path));
+  
   return async (url: string): Promise<ArrayBuffer | string> => {
-    // Try to find the file in our extracted files
-    const filename = url.split('/').pop() || url;
-    const file = fileMap.get(filename) || fileMap.get(url);
+    // Normalize the URL (remove query parameters, normalize directory separators)
+    let normalizedUrl = url.split('?')[0].toLowerCase();
+    normalizedUrl = normalizedUrl.replace(/\\/g, '/');
+    
+    // Extract just the filename
+    const filename = normalizedUrl.split('/').pop() || normalizedUrl;
+    
+    console.log(`Looking for: ${normalizedUrl} or ${filename}`);
+    
+    // Try different ways to find the file
+    const file = fileMap.get(normalizedUrl) || 
+                fileMap.get(filename) || 
+                extractedFiles.find(f => f.path.toLowerCase().endsWith(normalizedUrl));
     
     if (file && file.data) {
+      console.log(`Found file: ${file.path}`);
+      
       // If it's a GLTF JSON file, parse it and rewrite URLs
       if (file.isGltf && file.name.endsWith('.gltf')) {
         const textDecoder = new TextDecoder('utf-8');
         const jsonContent = textDecoder.decode(file.data);
-        const gltfJson = JSON.parse(jsonContent);
+        let gltfJson = JSON.parse(jsonContent);
+        
+        // Get the directory path of the gltf file
+        const gltfDir = file.path.includes('/') 
+          ? file.path.substring(0, file.path.lastIndexOf('/') + 1) 
+          : '';
         
         // Process for rewriting the URLs in the GLTF
         if (gltfJson.images) {
           gltfJson.images.forEach((image: any) => {
             if (image.uri) {
+              // Try different ways to find the image
               const imagePath = image.uri;
-              const imageFile = extractedFiles.find(f => f.path.endsWith(imagePath));
+              const absoluteImagePath = gltfDir + imagePath;
+              
+              const imageFile = 
+                fileMap.get(imagePath.toLowerCase()) || 
+                fileMap.get(absoluteImagePath.toLowerCase()) ||
+                extractedFiles.find(f => 
+                  f.path.toLowerCase() === imagePath.toLowerCase() || 
+                  f.path.toLowerCase() === absoluteImagePath.toLowerCase() ||
+                  f.path.toLowerCase().endsWith('/' + imagePath.toLowerCase())
+                );
+              
               if (imageFile) {
+                console.log(`Rewrote image ${imagePath} to ${imageFile.url.href}`);
                 image.uri = imageFile.url.href;
+              } else {
+                console.warn(`Image not found: ${imagePath} (absolute: ${absoluteImagePath})`);
               }
             }
           });
@@ -124,10 +172,24 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
         if (gltfJson.buffers) {
           gltfJson.buffers.forEach((buffer: any) => {
             if (buffer.uri) {
+              // Try different ways to find the buffer
               const bufferPath = buffer.uri;
-              const bufferFile = extractedFiles.find(f => f.path.endsWith(bufferPath));
+              const absoluteBufferPath = gltfDir + bufferPath;
+              
+              const bufferFile = 
+                fileMap.get(bufferPath.toLowerCase()) || 
+                fileMap.get(absoluteBufferPath.toLowerCase()) ||
+                extractedFiles.find(f => 
+                  f.path.toLowerCase() === bufferPath.toLowerCase() || 
+                  f.path.toLowerCase() === absoluteBufferPath.toLowerCase() ||
+                  f.path.toLowerCase().endsWith('/' + bufferPath.toLowerCase())
+                );
+              
               if (bufferFile) {
+                console.log(`Rewrote buffer ${bufferPath} to ${bufferFile.url.href}`);
                 buffer.uri = bufferFile.url.href;
+              } else {
+                console.warn(`Buffer not found: ${bufferPath} (absolute: ${absoluteBufferPath})`);
               }
             }
           });
@@ -141,7 +203,12 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
     
     // If not found in ZIP, fetch from network
     console.log(`File not found in ZIP, fetching from URL: ${url}`);
-    const response = await fetch(url);
-    return await response.arrayBuffer();
+    try {
+      const response = await fetch(url);
+      return await response.arrayBuffer();
+    } catch (error) {
+      console.error(`Error fetching ${url}:`, error);
+      throw new Error(`Failed to load ${url}: ${error}`);
+    }
   };
 }
