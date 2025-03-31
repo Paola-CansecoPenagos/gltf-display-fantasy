@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { 
@@ -25,7 +24,6 @@ import { useToast } from '@/components/ui/use-toast';
 import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive } from 'lucide-react';
 import * as THREE from 'three';
 import { extractZipFile, createZipResourceLoader, ExtractedFile } from '@/utils/zipUtils';
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 
 const PRESET_MODELS = [
   {
@@ -93,33 +91,65 @@ function CameraController() {
   return null;
 }
 
-// Modified Model component to support custom loaders for ZIP files
+class KeyboardControlsManager {
+  pressedKeys = new Set<string>();
+  
+  constructor() {
+    window.addEventListener('keydown', this.handleKeyDown);
+    window.addEventListener('keyup', this.handleKeyUp);
+  }
+  
+  handleKeyDown = (e: KeyboardEvent) => {
+    this.pressedKeys.add(e.code);
+  };
+  
+  handleKeyUp = (e: KeyboardEvent) => {
+    this.pressedKeys.delete(e.code);
+  };
+  
+  getKeys() {
+    return this.pressedKeys;
+  }
+  
+  cleanup() {
+    window.removeEventListener('keydown', this.handleKeyDown);
+    window.removeEventListener('keyup', this.handleKeyUp);
+  }
+}
+
+const KeyboardControls = new KeyboardControlsManager();
+
+useGLTF.preload(PRESET_MODELS[0].url);
+
 function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipFiles?: ExtractedFile[] }) {
-  const gltfResult = useGLTF(url, zipFiles ? true : undefined);
+  const gltfResult = useGLTF(url);
   const modelRef = useRef<THREE.Group>();
   
-  // Setup custom fetch if we have ZIP files
   useEffect(() => {
     if (zipFiles) {
-      // Override the loader's fileLoader with our custom one
-      const loader = useGLTF.getLoader();
-      const originalLoad = loader.fileLoader.load;
-      
       const customResourceLoader = createZipResourceLoader(zipFiles);
       
-      loader.fileLoader.load = function(url: string, onLoad: (response: string | ArrayBuffer) => void, onProgress?: (event: ProgressEvent) => void, onError?: (event: ErrorEvent) => void) {
-        customResourceLoader(url)
-          .then(onLoad)
-          .catch((error) => {
-            if (onError) onError(new ErrorEvent('error', { error }));
-          });
+      THREE.FileLoader.prototype.load = function(
+        url: string, 
+        onLoad?: ((response: string | ArrayBuffer) => void), 
+        onProgress?: ((event: ProgressEvent) => void),
+        onError?: ((event: ErrorEvent) => void)
+      ): any {
+        if (onLoad) {
+          customResourceLoader(url)
+            .then(onLoad)
+            .catch((error) => {
+              if (onError) onError(new ErrorEvent('error', { error }));
+            });
           
-        return null as any; // The fileLoader.load expects a return value, but we're handling it asynchronously
+          return null;
+        } else {
+          return THREE.FileLoader.prototype.load.call(this, url);
+        }
       };
       
       return () => {
-        // Reset the fileLoader when component unmounts
-        loader.fileLoader.load = originalLoad;
+        THREE.FileLoader.prototype.load = THREE.FileLoader.prototype.load;
       };
     }
   }, [zipFiles, url]);
@@ -151,36 +181,6 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
     />
   );
 }
-
-class KeyboardControlsManager {
-  pressedKeys = new Set<string>();
-  
-  constructor() {
-    window.addEventListener('keydown', this.handleKeyDown);
-    window.addEventListener('keyup', this.handleKeyUp);
-  }
-  
-  handleKeyDown = (e: KeyboardEvent) => {
-    this.pressedKeys.add(e.code);
-  };
-  
-  handleKeyUp = (e: KeyboardEvent) => {
-    this.pressedKeys.delete(e.code);
-  };
-  
-  getKeys() {
-    return this.pressedKeys;
-  }
-  
-  cleanup() {
-    window.removeEventListener('keydown', this.handleKeyDown);
-    window.removeEventListener('keyup', this.handleKeyUp);
-  }
-}
-
-const KeyboardControls = new KeyboardControlsManager();
-
-useGLTF.preload(PRESET_MODELS[0].url);
 
 const GltfViewer = () => {
   const { toast } = useToast();
@@ -231,11 +231,9 @@ const GltfViewer = () => {
       return;
     }
 
-    // Extract the ZIP file contents
     const extractedFiles = await extractZipFile(file);
     if (!extractedFiles) return;
 
-    // Find the first GLTF file in the ZIP
     const gltfFile = extractedFiles.find(f => f.isGltf);
     if (!gltfFile) {
       toast({
@@ -246,7 +244,6 @@ const GltfViewer = () => {
       return;
     }
 
-    // Set the extracted files and model URL
     setZipFiles(extractedFiles);
     setModelUrl(gltfFile.url.href);
     setModelInfo(`Modelo desde ZIP: ${file.name} - ${gltfFile.name}`);
@@ -258,13 +255,11 @@ const GltfViewer = () => {
   }, [toast]);
   
   const handleFiles = useCallback((file: File) => {
-    // Handle ZIP files
     if (file.name.endsWith('.zip')) {
       handleZipFileUpload(file);
       return;
     }
     
-    // Handle GLTF/GLB files as before
     if (!file.name.match(/\.(gltf|glb)$/i)) {
       toast({
         title: "Error de formato",
@@ -274,7 +269,6 @@ const GltfViewer = () => {
       return;
     }
     
-    // Clear any previous ZIP files data
     setZipFiles(null);
     
     const url = URL.createObjectURL(file);
@@ -298,7 +292,6 @@ const GltfViewer = () => {
     
     try {
       new URL(urlInput);
-      // Clear any previous ZIP files data
       setZipFiles(null);
       setModelUrl(urlInput);
       setModelInfo(`Modelo: URL externa`);
@@ -316,7 +309,6 @@ const GltfViewer = () => {
   }, [urlInput, toast]);
   
   const loadPresetModel = useCallback((model: typeof PRESET_MODELS[0]) => {
-    // Clear any previous ZIP files data
     setZipFiles(null);
     setModelUrl(model.url);
     setModelInfo(`Modelo: ${model.name}`);
@@ -327,7 +319,6 @@ const GltfViewer = () => {
   }, [toast]);
   
   const resetViewer = useCallback(() => {
-    // Clear any previous ZIP files data
     setZipFiles(null);
     setModelUrl(PRESET_MODELS[0].url);
     setModelInfo(`Modelo: ${PRESET_MODELS[0].name}`);
@@ -349,7 +340,6 @@ const GltfViewer = () => {
     return () => {
       KeyboardControls.cleanup();
       
-      // Clean up object URLs when component unmounts
       if (zipFiles) {
         zipFiles.forEach(file => {
           if (file.url) {
@@ -466,11 +456,9 @@ const GltfViewer = () => {
                       variant="outline" 
                       className="flex-1 gap-2"
                       onClick={() => {
-                        // Set accept property to .zip and click
                         if (fileInputRef.current) {
                           fileInputRef.current.accept = ".zip";
                           fileInputRef.current.click();
-                          // Reset accept property after click
                           setTimeout(() => {
                             if (fileInputRef.current) {
                               fileInputRef.current.accept = ".gltf,.glb,.zip";

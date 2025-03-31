@@ -1,8 +1,5 @@
-
 import JSZip from 'jszip';
 import { toast } from '@/hooks/use-toast';
-import { Loader } from 'three';
-import { GLTF } from 'three/examples/jsm/loaders/GLTFLoader';
 
 export interface ExtractedFile {
   name: string;
