@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { 
   OrbitControls, 
   Stage, 
@@ -24,7 +24,6 @@ import { useToast } from '@/components/ui/use-toast';
 import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download } from 'lucide-react';
 import * as THREE from 'three';
 
-// Default models for quick testing
 const PRESET_MODELS = [
   {
     name: 'Duck',
@@ -52,12 +51,10 @@ const PRESET_MODELS = [
   }
 ];
 
-// Environment presets
 const ENVIRONMENTS = [
   'sunset', 'dawn', 'night', 'warehouse', 'forest', 'apartment', 'studio', 'city', 'park', 'lobby'
 ];
 
-// Loading indicator component
 function LoadingIndicator() {
   const { progress } = useProgress();
   return (
@@ -76,30 +73,39 @@ function LoadingIndicator() {
   );
 }
 
-// The actual 3D model component with keyboard controls
+function CameraController() {
+  const { camera } = useThree();
+  
+  useFrame(() => {
+    const keys = KeyboardControls.getKeys();
+    
+    if (keys.has('ArrowUp')) {
+      camera.position.multiplyScalar(0.95); // Move closer
+    }
+    if (keys.has('ArrowDown')) {
+      camera.position.multiplyScalar(1.05); // Move away
+    }
+  });
+  
+  return null;
+}
+
 function Model({ url, scale = 1 }: { url: string, scale?: number }) {
   const { scene } = useGLTF(url);
   const modelRef = useRef<THREE.Group>();
   
-  // Create a clone to avoid modifying the cached original
   const clone = useMemo(() => scene.clone(), [scene]);
   
-  // Handle keyboard controls
   useFrame(({ clock }) => {
     if (modelRef.current) {
       const keys = KeyboardControls.getKeys();
       
-      // Rotate model based on arrow keys
       if (keys.has('ArrowLeft')) modelRef.current.rotation.y += 0.02;
       if (keys.has('ArrowRight')) modelRef.current.rotation.y -= 0.02;
-      if (keys.has('ArrowUp')) modelRef.current.rotation.x += 0.02;
-      if (keys.has('ArrowDown')) modelRef.current.rotation.x -= 0.02;
       
-      // Scale model with + and - keys
       if (keys.has('Equal') || keys.has('+')) modelRef.current.scale.multiplyScalar(1.01);
       if (keys.has('Minus') || keys.has('-')) modelRef.current.scale.multiplyScalar(0.99);
       
-      // Reset rotation with R key
       if (keys.has('KeyR')) {
         modelRef.current.rotation.set(0, 0, 0);
       }
@@ -116,7 +122,6 @@ function Model({ url, scale = 1 }: { url: string, scale?: number }) {
   );
 }
 
-// Keyboard controls manager
 class KeyboardControlsManager {
   pressedKeys = new Set<string>();
   
@@ -143,13 +148,10 @@ class KeyboardControlsManager {
   }
 }
 
-// Singleton instance of keyboard controls
 const KeyboardControls = new KeyboardControlsManager();
 
-// Add a cache invalidation mechanism
 useGLTF.preload(PRESET_MODELS[0].url);
 
-// Main component
 const GltfViewer = () => {
   const { toast } = useToast();
   const [modelUrl, setModelUrl] = useState<string>(PRESET_MODELS[0].url);
@@ -166,7 +168,6 @@ const GltfViewer = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState<boolean>(false);
   
-  // Handle the drag events
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -177,7 +178,6 @@ const GltfViewer = () => {
     }
   }, []);
   
-  // Handle the file drop
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -189,9 +189,7 @@ const GltfViewer = () => {
     }
   }, []);
   
-  // Process files (from drop or file input)
   const handleFiles = useCallback((file: File) => {
-    // Only accept glTF/GLB files
     if (!file.name.match(/\.(gltf|glb)$/i)) {
       toast({
         title: "Error de formato",
@@ -211,18 +209,15 @@ const GltfViewer = () => {
     });
   }, [toast]);
   
-  // Handle file input change
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       handleFiles(e.target.files[0]);
     }
   }, [handleFiles]);
   
-  // Load a model from URL
   const loadModelFromUrl = useCallback(() => {
     if (!urlInput) return;
     
-    // Basic URL validation
     try {
       new URL(urlInput);
       setModelUrl(urlInput);
@@ -240,7 +235,6 @@ const GltfViewer = () => {
     }
   }, [urlInput, toast]);
   
-  // Load a preset model
   const loadPresetModel = useCallback((model: typeof PRESET_MODELS[0]) => {
     setModelUrl(model.url);
     setModelInfo(`Modelo: ${model.name}`);
@@ -250,7 +244,6 @@ const GltfViewer = () => {
     });
   }, [toast]);
   
-  // Reset the viewer
   const resetViewer = useCallback(() => {
     setModelUrl(PRESET_MODELS[0].url);
     setModelInfo(`Modelo: ${PRESET_MODELS[0].name}`);
@@ -268,19 +261,18 @@ const GltfViewer = () => {
     });
   }, [toast]);
   
-  // Clean up keyboard controls on unmount
   useEffect(() => {
     return () => {
       KeyboardControls.cleanup();
     };
   }, []);
 
-  // Extract the model info tooltip component
   const renderKeyboardHelp = () => (
     <div className="keyboard-help absolute bottom-4 right-4 bg-black/70 text-white p-3 rounded-md text-sm z-10">
       <h4 className="text-base font-semibold mb-1">Control con teclado:</h4>
       <ul className="list-disc pl-5 space-y-1">
-        <li>Flechas: Rotar modelo</li>
+        <li>Flechas ←/→: Rotar modelo</li>
+        <li>Flechas ↑/↓: Acercarse/Alejarse</li>
         <li>+ / -: Escalar modelo</li>
         <li>R: Reiniciar rotación</li>
       </ul>
@@ -289,27 +281,23 @@ const GltfViewer = () => {
   
   return (
     <div className="gltf-viewer-container">
-      {/* Canvas for 3D rendering */}
       <Canvas 
         style={{ background: backgroundColor }}
         camera={{ position: [5, 5, 5], fov: 50 }}
         shadows
       >
         <Suspense fallback={<LoadingIndicator />}>
-          {/* Environment and lighting */}
           <Environment preset={environmentPreset as any} background={false} />
           
-          {/* The 3D model */}
           <Model url={modelUrl} scale={scale} />
           
-          {/* Grid and axes */}
+          <CameraController />
+          
           {showGrid && <Grid infiniteGrid cellSize={1} sectionSize={3} fadeDistance={30} />}
           {showAxes && <axesHelper args={[5]} />}
           
-          {/* Shadows */}
           {showShadows && <ContactShadows opacity={0.5} scale={10} blur={1} far={10} />}
           
-          {/* Camera controls */}
           <OrbitControls 
             autoRotate={autoRotate}
             autoRotateSpeed={1}
@@ -321,7 +309,6 @@ const GltfViewer = () => {
         </Suspense>
       </Canvas>
       
-      {/* Control panel toggle button */}
       <Button 
         variant="secondary" 
         className={`toggle-panel-btn ${!isPanelOpen ? 'panel-collapsed' : ''}`}
@@ -330,17 +317,14 @@ const GltfViewer = () => {
         {isPanelOpen ? <ChevronRight /> : <ChevronLeft />}
       </Button>
       
-      {/* Keyboard controls help */}
       {renderKeyboardHelp()}
       
-      {/* Model info display */}
       {modelInfo && (
         <div className="model-info">
           {modelInfo}
         </div>
       )}
       
-      {/* Control panel */}
       <div className={`controls-panel ${!isPanelOpen ? 'collapsed' : ''}`}>
         <div className="p-4">
           <h2 className="text-2xl font-bold mb-4">Visor GLTF</h2>
@@ -357,7 +341,6 @@ const GltfViewer = () => {
                   <CardTitle>Cargar modelo</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {/* File upload area */}
                   <div 
                     className={`dropzone ${dragActive ? 'active' : ''}`}
                     onDragEnter={handleDrag}
@@ -415,7 +398,6 @@ const GltfViewer = () => {
                   <CardTitle>Ajustes de visualización</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {/* Background color */}
                   <div>
                     <Label htmlFor="bg-color">Color de fondo:</Label>
                     <div className="flex items-center mt-1">
@@ -434,7 +416,6 @@ const GltfViewer = () => {
                     </div>
                   </div>
                   
-                  {/* Environment */}
                   <div>
                     <Label htmlFor="environment">Entorno:</Label>
                     <Select 
@@ -454,7 +435,6 @@ const GltfViewer = () => {
                     </Select>
                   </div>
                   
-                  {/* Scale */}
                   <div>
                     <Label>Escala: {scale.toFixed(2)}</Label>
                     <Slider
@@ -469,7 +449,6 @@ const GltfViewer = () => {
                   
                   <Separator />
                   
-                  {/* Toggle options */}
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
                       <Label htmlFor="show-grid">Mostrar cuadrícula</Label>
