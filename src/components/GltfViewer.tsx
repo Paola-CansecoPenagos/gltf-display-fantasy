@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useRef, Suspense, useMemo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { 
   OrbitControls, 
   Stage, 
@@ -76,21 +76,75 @@ function LoadingIndicator() {
   );
 }
 
-// The actual 3D model component
+// The actual 3D model component with keyboard controls
 function Model({ url, scale = 1 }: { url: string, scale?: number }) {
   const { scene } = useGLTF(url);
+  const modelRef = useRef<THREE.Group>();
   
   // Create a clone to avoid modifying the cached original
   const clone = useMemo(() => scene.clone(), [scene]);
   
+  // Handle keyboard controls
+  useFrame(({ clock }) => {
+    if (modelRef.current) {
+      const keys = KeyboardControls.getKeys();
+      
+      // Rotate model based on arrow keys
+      if (keys.has('ArrowLeft')) modelRef.current.rotation.y += 0.02;
+      if (keys.has('ArrowRight')) modelRef.current.rotation.y -= 0.02;
+      if (keys.has('ArrowUp')) modelRef.current.rotation.x += 0.02;
+      if (keys.has('ArrowDown')) modelRef.current.rotation.x -= 0.02;
+      
+      // Scale model with + and - keys
+      if (keys.has('Equal') || keys.has('+')) modelRef.current.scale.multiplyScalar(1.01);
+      if (keys.has('Minus') || keys.has('-')) modelRef.current.scale.multiplyScalar(0.99);
+      
+      // Reset rotation with R key
+      if (keys.has('KeyR')) {
+        modelRef.current.rotation.set(0, 0, 0);
+      }
+    }
+  });
+  
   return (
     <primitive 
+      ref={modelRef}
       object={clone} 
       scale={Array.isArray(scale) ? scale : [scale, scale, scale]} 
       dispose={null}
     />
   );
 }
+
+// Keyboard controls manager
+class KeyboardControlsManager {
+  pressedKeys = new Set<string>();
+  
+  constructor() {
+    window.addEventListener('keydown', this.handleKeyDown);
+    window.addEventListener('keyup', this.handleKeyUp);
+  }
+  
+  handleKeyDown = (e: KeyboardEvent) => {
+    this.pressedKeys.add(e.code);
+  };
+  
+  handleKeyUp = (e: KeyboardEvent) => {
+    this.pressedKeys.delete(e.code);
+  };
+  
+  getKeys() {
+    return this.pressedKeys;
+  }
+  
+  cleanup() {
+    window.removeEventListener('keydown', this.handleKeyDown);
+    window.removeEventListener('keyup', this.handleKeyUp);
+  }
+}
+
+// Singleton instance of keyboard controls
+const KeyboardControls = new KeyboardControlsManager();
 
 // Add a cache invalidation mechanism
 useGLTF.preload(PRESET_MODELS[0].url);
@@ -214,6 +268,25 @@ const GltfViewer = () => {
     });
   }, [toast]);
   
+  // Clean up keyboard controls on unmount
+  useEffect(() => {
+    return () => {
+      KeyboardControls.cleanup();
+    };
+  }, []);
+
+  // Extract the model info tooltip component
+  const renderKeyboardHelp = () => (
+    <div className="keyboard-help absolute bottom-4 right-4 bg-black/70 text-white p-3 rounded-md text-sm z-10">
+      <h4 className="text-base font-semibold mb-1">Control con teclado:</h4>
+      <ul className="list-disc pl-5 space-y-1">
+        <li>Flechas: Rotar modelo</li>
+        <li>+ / -: Escalar modelo</li>
+        <li>R: Reiniciar rotación</li>
+      </ul>
+    </div>
+  );
+  
   return (
     <div className="gltf-viewer-container">
       {/* Canvas for 3D rendering */}
@@ -256,6 +329,9 @@ const GltfViewer = () => {
       >
         {isPanelOpen ? <ChevronRight /> : <ChevronLeft />}
       </Button>
+      
+      {/* Keyboard controls help */}
+      {renderKeyboardHelp()}
       
       {/* Model info display */}
       {modelInfo && (
