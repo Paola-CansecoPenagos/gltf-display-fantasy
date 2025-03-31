@@ -96,10 +96,10 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
   
   // Add multiple ways to look up each file
   extractedFiles.forEach(file => {
-    // By filename
+    // By filename (case insensitive)
     fileMap.set(file.name.toLowerCase(), file);
     
-    // By full path
+    // By full path (case insensitive)
     fileMap.set(file.path.toLowerCase(), file);
     
     // By path without leading directory
@@ -107,9 +107,15 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
       const pathWithoutDir = file.path.substring(file.path.indexOf('/') + 1);
       fileMap.set(pathWithoutDir.toLowerCase(), file);
     }
+    
+    // Add by basename only (for buffer files often referenced as just "scene.bin")
+    const baseName = file.name.toLowerCase();
+    if (!fileMap.has(baseName)) {
+      fileMap.set(baseName, file);
+    }
   });
   
-  // Debug: Log all available files
+  // Log available files for debugging
   console.log('ZIP contents:', extractedFiles.map(f => f.path));
   
   return async (url: string): Promise<ArrayBuffer | string> => {
@@ -117,15 +123,25 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
     let normalizedUrl = url.split('?')[0].toLowerCase();
     normalizedUrl = normalizedUrl.replace(/\\/g, '/');
     
-    // Extract just the filename
+    // Extract just the filename without path
     const filename = normalizedUrl.split('/').pop() || normalizedUrl;
     
     console.log(`Looking for: ${normalizedUrl} or ${filename}`);
     
     // Try different ways to find the file
-    const file = fileMap.get(normalizedUrl) || 
-                fileMap.get(filename) || 
-                extractedFiles.find(f => f.path.toLowerCase().endsWith(normalizedUrl));
+    let file = fileMap.get(normalizedUrl) || 
+               fileMap.get(filename) || 
+               extractedFiles.find(f => f.path.toLowerCase().endsWith(normalizedUrl)) ||
+               extractedFiles.find(f => f.path.toLowerCase().endsWith('/' + filename)) ||
+               extractedFiles.find(f => f.name.toLowerCase() === filename);
+    
+    // Special check for buffer files like scene.bin which are often referenced with different paths
+    if (!file && filename.endsWith('.bin')) {
+      file = extractedFiles.find(f => f.name.toLowerCase().endsWith('.bin'));
+      if (file) {
+        console.log(`Found buffer file by extension: ${file.path}`);
+      }
+    }
     
     if (file && file.data) {
       console.log(`Found file: ${file.path}`);
@@ -182,7 +198,8 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                 extractedFiles.find(f => 
                   f.path.toLowerCase() === bufferPath.toLowerCase() || 
                   f.path.toLowerCase() === absoluteBufferPath.toLowerCase() ||
-                  f.path.toLowerCase().endsWith('/' + bufferPath.toLowerCase())
+                  f.path.toLowerCase().endsWith('/' + bufferPath.toLowerCase()) ||
+                  f.name.toLowerCase() === bufferPath.toLowerCase()
                 );
               
               if (bufferFile) {
@@ -190,6 +207,13 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                 buffer.uri = bufferFile.url.href;
               } else {
                 console.warn(`Buffer not found: ${bufferPath} (absolute: ${absoluteBufferPath})`);
+                
+                // Last resort: check if there's any .bin file that could be this buffer
+                const anyBinFile = extractedFiles.find(f => f.name.toLowerCase().endsWith('.bin'));
+                if (anyBinFile) {
+                  console.log(`Using alternative bin file: ${anyBinFile.path}`);
+                  buffer.uri = anyBinFile.url.href;
+                }
               }
             }
           });

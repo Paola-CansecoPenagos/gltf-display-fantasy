@@ -124,10 +124,16 @@ useGLTF.preload(PRESET_MODELS[0].url);
 function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipFiles?: ExtractedFile[] }) {
   const [customLoader, setCustomLoader] = useState<boolean>(false);
   const modelRef = useRef<THREE.Group>(null);
+  const originalFileLoader = useRef<typeof THREE.FileLoader.prototype.load | null>(null);
   
   useEffect(() => {
-    if (zipFiles) {
-      const originalFileLoader = THREE.FileLoader.prototype.load;
+    if (zipFiles && zipFiles.length > 0) {
+      console.log("Setting up custom loader for ZIP files");
+      
+      if (!originalFileLoader.current) {
+        originalFileLoader.current = THREE.FileLoader.prototype.load;
+      }
+      
       const customResourceLoader = createZipResourceLoader(zipFiles);
       
       THREE.FileLoader.prototype.load = function(
@@ -139,7 +145,7 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
         if (!url) return null;
         
         if (url.startsWith('blob:')) {
-          return originalFileLoader.call(
+          return originalFileLoader.current?.call(
             this, 
             url, 
             onLoad, 
@@ -147,6 +153,8 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
             onError
           );
         }
+        
+        console.log(`Custom loader intercepting: ${url}`);
         
         if (onLoad) {
           customResourceLoader(url)
@@ -161,20 +169,23 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
           
           return null;
         } else {
-          return originalFileLoader.call(this, url);
+          return originalFileLoader.current?.call(this, url, onLoad, onProgress, onError);
         }
       };
       
       setCustomLoader(true);
-      
-      return () => {
-        if (customLoader) {
-          THREE.FileLoader.prototype.load = originalFileLoader;
-          setCustomLoader(false);
-        }
-      };
     }
+    
+    return () => {
+      if (customLoader && originalFileLoader.current) {
+        console.log("Restoring original FileLoader");
+        THREE.FileLoader.prototype.load = originalFileLoader.current;
+        setCustomLoader(false);
+      }
+    };
   }, [zipFiles]);
+  
+  const key = useMemo(() => zipFiles ? Math.random().toString() : url, [url, zipFiles]);
   
   const gltfResult = useGLTF(url);
   const clone = useMemo(() => gltfResult.scene.clone(), [gltfResult.scene]);
@@ -201,6 +212,7 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
       object={clone} 
       scale={Array.isArray(scale) ? scale : [scale, scale, scale]} 
       dispose={null}
+      key={key}
     />
   );
 }
@@ -278,7 +290,7 @@ const GltfViewer = () => {
         title: "Modelo ZIP cargado",
         description: `Se encontraron ${extractedFiles.length} archivos, usando ${gltfFile.name}`,
       });
-    }, 100);
+    }, 300);
     
   }, [toast]);
   
