@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { 
@@ -21,8 +22,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
-import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive } from 'lucide-react';
 import * as THREE from 'three';
+import { extractZipFile, createZipResourceLoader, ExtractedFile } from '@/utils/zipUtils';
 
 const PRESET_MODELS = [
   {
@@ -90,8 +92,9 @@ function CameraController() {
   return null;
 }
 
-function Model({ url, scale = 1 }: { url: string, scale?: number }) {
-  const { scene } = useGLTF(url);
+// Modified Model component to support custom loaders for ZIP files
+function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipFiles?: ExtractedFile[] }) {
+  const { scene } = useGLTF(url, zipFiles ? createZipResourceLoader(zipFiles) : undefined);
   const modelRef = useRef<THREE.Group>();
   
   const clone = useMemo(() => scene.clone(), [scene]);
@@ -166,7 +169,9 @@ const GltfViewer = () => {
   const [autoRotate, setAutoRotate] = useState<boolean>(false);
   const [scale, setScale] = useState<number>(1);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState<boolean>(false);
+  const [zipFiles, setZipFiles] = useState<ExtractedFile[] | null>(null);
   
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -188,16 +193,62 @@ const GltfViewer = () => {
       handleFiles(file);
     }
   }, []);
-  
-  const handleFiles = useCallback((file: File) => {
-    if (!file.name.match(/\.(gltf|glb)$/i)) {
+
+  const handleZipFileUpload = useCallback(async (file: File) => {
+    if (!file.name.match(/\.(zip)$/i)) {
       toast({
         title: "Error de formato",
-        description: "Solo se permiten archivos GLTF o GLB",
+        description: "Solo se permiten archivos ZIP",
         variant: "destructive"
       });
       return;
     }
+
+    // Extract the ZIP file contents
+    const extractedFiles = await extractZipFile(file);
+    if (!extractedFiles) return;
+
+    // Find the first GLTF file in the ZIP
+    const gltfFile = extractedFiles.find(f => f.isGltf);
+    if (!gltfFile) {
+      toast({
+        title: "Error",
+        description: "No se encontraron archivos GLTF o GLB en el ZIP",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Set the extracted files and model URL
+    setZipFiles(extractedFiles);
+    setModelUrl(gltfFile.url.href);
+    setModelInfo(`Modelo desde ZIP: ${file.name} - ${gltfFile.name}`);
+    
+    toast({
+      title: "Modelo ZIP cargado",
+      description: `Se encontraron ${extractedFiles.length} archivos, usando ${gltfFile.name}`,
+    });
+  }, [toast]);
+  
+  const handleFiles = useCallback((file: File) => {
+    // Handle ZIP files
+    if (file.name.endsWith('.zip')) {
+      handleZipFileUpload(file);
+      return;
+    }
+    
+    // Handle GLTF/GLB files as before
+    if (!file.name.match(/\.(gltf|glb)$/i)) {
+      toast({
+        title: "Error de formato",
+        description: "Solo se permiten archivos GLTF, GLB o ZIP",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    // Clear any previous ZIP files data
+    setZipFiles(null);
     
     const url = URL.createObjectURL(file);
     setModelUrl(url);
@@ -207,7 +258,7 @@ const GltfViewer = () => {
       title: "Modelo cargado",
       description: `${file.name} se ha cargado correctamente`,
     });
-  }, [toast]);
+  }, [toast, handleZipFileUpload]);
   
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -220,6 +271,8 @@ const GltfViewer = () => {
     
     try {
       new URL(urlInput);
+      // Clear any previous ZIP files data
+      setZipFiles(null);
       setModelUrl(urlInput);
       setModelInfo(`Modelo: URL externa`);
       toast({
@@ -236,6 +289,8 @@ const GltfViewer = () => {
   }, [urlInput, toast]);
   
   const loadPresetModel = useCallback((model: typeof PRESET_MODELS[0]) => {
+    // Clear any previous ZIP files data
+    setZipFiles(null);
     setModelUrl(model.url);
     setModelInfo(`Modelo: ${model.name}`);
     toast({
@@ -245,6 +300,8 @@ const GltfViewer = () => {
   }, [toast]);
   
   const resetViewer = useCallback(() => {
+    // Clear any previous ZIP files data
+    setZipFiles(null);
     setModelUrl(PRESET_MODELS[0].url);
     setModelInfo(`Modelo: ${PRESET_MODELS[0].name}`);
     setBackgroundColor('#f5f5f5');
@@ -264,8 +321,17 @@ const GltfViewer = () => {
   useEffect(() => {
     return () => {
       KeyboardControls.cleanup();
+      
+      // Clean up object URLs when component unmounts
+      if (zipFiles) {
+        zipFiles.forEach(file => {
+          if (file.url) {
+            URL.revokeObjectURL(file.url.href);
+          }
+        });
+      }
     };
-  }, []);
+  }, [zipFiles]);
 
   const renderKeyboardHelp = () => (
     <div className="keyboard-help absolute bottom-4 right-4 bg-black/70 text-white p-3 rounded-md text-sm z-10">
@@ -289,7 +355,7 @@ const GltfViewer = () => {
         <Suspense fallback={<LoadingIndicator />}>
           <Environment preset={environmentPreset as any} background={false} />
           
-          <Model url={modelUrl} scale={scale} />
+          <Model url={modelUrl} scale={scale} zipFiles={zipFiles || undefined} />
           
           <CameraController />
           
@@ -350,14 +416,45 @@ const GltfViewer = () => {
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Upload className="mx-auto mb-2" />
-                    <p>Arrastra un archivo GLTF/GLB aquí o haz clic para explorar</p>
+                    <p>Arrastra un archivo GLTF/GLB/ZIP aquí o haz clic para explorar</p>
                     <input 
                       ref={fileInputRef}
                       type="file" 
-                      accept=".gltf,.glb"
+                      accept=".gltf,.glb,.zip"
                       onChange={handleFileChange}
                       className="hidden"
                     />
+                  </div>
+                  
+                  <div className="mt-4 flex gap-2">
+                    <Button 
+                      variant="outline" 
+                      className="flex-1 gap-2"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Upload size={18} />
+                      Cargar GLTF/GLB
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      className="flex-1 gap-2"
+                      onClick={() => {
+                        // Set accept property to .zip and click
+                        if (fileInputRef.current) {
+                          fileInputRef.current.accept = ".zip";
+                          fileInputRef.current.click();
+                          // Reset accept property after click
+                          setTimeout(() => {
+                            if (fileInputRef.current) {
+                              fileInputRef.current.accept = ".gltf,.glb,.zip";
+                            }
+                          }, 100);
+                        }
+                      }}
+                    >
+                      <FileArchive size={18} />
+                      Cargar ZIP
+                    </Button>
                   </div>
                   
                   <div className="mt-4">
