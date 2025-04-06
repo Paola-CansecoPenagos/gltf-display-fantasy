@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { 
@@ -118,42 +119,51 @@ useGLTF.preload(PRESET_MODELS[0].url);
 function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipFiles?: ExtractedFile[] }) {
   const modelRef = useRef<THREE.Group>(null);
   const originalFileLoader = useRef<typeof THREE.FileLoader.prototype.load | null>(null);
+  const [modelKey, setModelKey] = useState<string>(zipFiles ? Math.random().toString() : url);
 
   useEffect(() => {
     if (zipFiles && zipFiles.length > 0) {
+      // Store the original loader and replace it with our custom one
       if (!originalFileLoader.current) {
         originalFileLoader.current = THREE.FileLoader.prototype.load;
       }
 
       const customResourceLoader = createZipResourceLoader(zipFiles);
-
+      
       THREE.FileLoader.prototype.load = function(url, onLoad, onProgress, onError) {
-        if (!url) return;
+        if (!url) return undefined;
 
+        // Handle blob URLs directly
         if (url.startsWith('blob:')) {
           return originalFileLoader.current?.call(this, url, onLoad, onProgress, onError);
         }
 
+        // Use our custom loader
         customResourceLoader(url)
           .then(onLoad!)
           .catch(error => {
-            if (onError) onError(new ErrorEvent('error', { error }));
+            if (onError) onError(error);
           });
+
+        return undefined;
       };
+
+      // Force model remounting with a new key when zip files change
+      setModelKey(Math.random().toString());
     }
 
     return () => {
+      // Restore the original loader on cleanup
       if (originalFileLoader.current) {
         THREE.FileLoader.prototype.load = originalFileLoader.current;
       }
     };
   }, [zipFiles]);
-
-  const key = useMemo(() => zipFiles ? Math.random().toString() : url, [url, zipFiles]);
-
-  const gltfResult = useGLTF(url);
-  const clone = useMemo(() => gltfResult.scene.clone(), [gltfResult.scene]);
-
+  
+  // Generate a unique key for the model to force remount when zip files change
+  const gltf = useGLTF(url, true);
+  const clone = useMemo(() => gltf.scene.clone(), [gltf.scene]);
+  
   useFrame(() => {
     if (modelRef.current) {
       const keys = KeyboardControls.getKeys();
@@ -165,7 +175,7 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
     }
   });
 
-  return <primitive ref={modelRef} object={clone} scale={[scale, scale, scale]} dispose={null} key={key} />;
+  return <primitive ref={modelRef} object={clone} scale={scale} dispose={null} key={modelKey} />;
 }
 
 const GltfViewer = () => {
@@ -176,17 +186,51 @@ const GltfViewer = () => {
   const [scale, setScale] = useState<number>(1);
   const [environmentPreset, setEnvironmentPreset] = useState<string>('sunset');
   const [backgroundColor, setBackgroundColor] = useState<string>('#f5f5f5');
+  const [modelKey, setModelKey] = useState<number>(0);
 
   const handleZipFileUpload = async (file: File) => {
-    const extracted = await extractZipFile(file);
-    if (!extracted) return;
+    try {
+      const extracted = await extractZipFile(file);
+      if (!extracted) {
+        toast({
+          title: "Error",
+          description: "No se pudieron extraer archivos del ZIP",
+          variant: "destructive",
+        });
+        return;
+      }
 
-    const gltfFile = extracted.find(f => f.isGltf);
-    if (!gltfFile) return;
+      const gltfFile = extracted.find(f => f.isGltf);
+      if (!gltfFile) {
+        toast({
+          title: "Error",
+          description: "No se encontró ningún archivo GLTF/GLB en el ZIP",
+          variant: "destructive",
+        });
+        return;
+      }
 
-    setZipFiles(extracted);
-    setModelUrl(gltfFile.url.href);
-    setLoaderReady(true);
+      // Report what we found
+      const binFiles = extracted.filter(f => f.isBin);
+      console.log(`Found ${extracted.length} files, including ${binFiles.length} binary files`);
+      
+      setZipFiles(extracted);
+      setModelUrl(gltfFile.url.href);
+      setLoaderReady(true);
+      setModelKey(prev => prev + 1); // Force model remount
+      
+      toast({
+        title: "Modelo cargado",
+        description: `Se cargó el modelo ${gltfFile.name} correctamente`,
+      });
+    } catch (error) {
+      console.error("Error al procesar el archivo ZIP:", error);
+      toast({
+        title: "Error",
+        description: "Error al procesar el archivo ZIP",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -194,7 +238,14 @@ const GltfViewer = () => {
       <Canvas style={{ background: backgroundColor }} camera={{ position: [5, 5, 5], fov: 50 }} shadows>
         <Suspense fallback={<LoadingIndicator />}>
           <Environment preset={environmentPreset as any} background={false} />
-          {(!zipFiles || loaderReady) && <Model url={modelUrl} scale={scale} zipFiles={zipFiles || undefined} />}
+          {(!zipFiles || loaderReady) && 
+            <Model 
+              url={modelUrl} 
+              scale={scale} 
+              zipFiles={zipFiles || undefined} 
+              key={`model-${modelKey}`}
+            />
+          }
           <CameraController />
           <Grid infiniteGrid cellSize={1} sectionSize={3} fadeDistance={30} />
           <ContactShadows opacity={0.5} scale={10} blur={1} far={10} />
