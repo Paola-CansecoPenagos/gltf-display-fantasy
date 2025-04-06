@@ -75,9 +75,13 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
     fileMap.set(strippedPath.toLowerCase(), file);
   });
 
+  console.log('[ZipLoader] Available files:', extractedFiles.map(f => f.path));
+
   return async (url: string): Promise<ArrayBuffer | string> => {
     const normalizedUrl = decodeURIComponent(url.split('?')[0].replace(/\\/g, '/').toLowerCase());
     const filename = normalizedUrl.split('/').pop() || normalizedUrl;
+
+    console.log('[ZipLoader] Searching for:', normalizedUrl, '→', filename);
 
     let file = fileMap.get(normalizedUrl) ||
                fileMap.get(filename) ||
@@ -86,6 +90,9 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
 
     if (!file && filename.endsWith('.bin')) {
       file = extractedFiles.find(f => f.name.toLowerCase().endsWith('.bin'));
+      if (file) {
+        console.log('[ZipLoader] Fallback to .bin file:', file.path);
+      }
     }
 
     if (file && file.data) {
@@ -106,6 +113,7 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                 fileMap.get(fullPath.toLowerCase());
 
               if (imageFile) {
+                console.log(`[ZipLoader] Rewriting image URI ${image.uri} → ${imageFile.url.href}`);
                 image.uri = imageFile.url.href;
               }
             }
@@ -128,10 +136,12 @@ export function createZipResourceLoader(extractedFiles: ExtractedFile[]): (url: 
                 );
 
               if (bufferFile) {
+                console.log(`[ZipLoader] Rewriting buffer URI ${bufferPath} → ${bufferFile.url.href}`);
                 buffer.uri = bufferFile.url.href;
               } else {
                 const anyBinFile = extractedFiles.find(f => f.name.toLowerCase().endsWith('.bin'));
                 if (anyBinFile) {
+                  console.log(`[ZipLoader] Fallback buffer URI → ${anyBinFile.url.href}`);
                   buffer.uri = anyBinFile.url.href;
                 }
               }
