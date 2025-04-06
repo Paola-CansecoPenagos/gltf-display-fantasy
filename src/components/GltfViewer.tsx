@@ -125,37 +125,37 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
   const [customLoader, setCustomLoader] = useState<boolean>(false);
   const modelRef = useRef<THREE.Group>(null);
   const originalFileLoader = useRef<typeof THREE.FileLoader.prototype.load | null>(null);
-
+  
   useEffect(() => {
     if (zipFiles && zipFiles.length > 0) {
       console.log("Setting up custom loader for ZIP files");
-
+      
       if (!originalFileLoader.current) {
         originalFileLoader.current = THREE.FileLoader.prototype.load;
       }
-
+      
       const customResourceLoader = createZipResourceLoader(zipFiles);
-
+      
       THREE.FileLoader.prototype.load = function(
-        url: string,
-        onLoad?: ((response: string | ArrayBuffer) => void),
+        url: string, 
+        onLoad?: ((response: string | ArrayBuffer) => void), 
         onProgress?: ((event: ProgressEvent) => void),
         onError?: ((event: ErrorEvent) => void)
       ): any {
         if (!url) return null;
-
+        
         if (url.startsWith('blob:')) {
           return originalFileLoader.current?.call(
-            this,
-            url,
-            onLoad,
-            onProgress,
+            this, 
+            url, 
+            onLoad, 
+            onProgress, 
             onError
           );
         }
-
+        
         console.log(`Custom loader intercepting: ${url}`);
-
+        
         if (onLoad) {
           customResourceLoader(url)
             .then(onLoad)
@@ -166,16 +166,16 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
                 onError(errorEvent);
               }
             });
-
+          
           return null;
         } else {
           return originalFileLoader.current?.call(this, url, onLoad, onProgress, onError);
         }
       };
-
+      
       setCustomLoader(true);
     }
-
+    
     return () => {
       if (customLoader && originalFileLoader.current) {
         console.log("Restoring original FileLoader");
@@ -184,50 +184,38 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
       }
     };
   }, [zipFiles]);
-
+  
   const key = useMemo(() => zipFiles ? Math.random().toString() : url, [url, zipFiles]);
-
+  
   const gltfResult = useGLTF(url);
   const clone = useMemo(() => gltfResult.scene.clone(), [gltfResult.scene]);
-
+  
   useFrame(({ clock }) => {
     if (modelRef.current) {
       const keys = KeyboardControls.getKeys();
-
+      
       if (keys.has('ArrowLeft')) modelRef.current.rotation.y += 0.02;
       if (keys.has('ArrowRight')) modelRef.current.rotation.y -= 0.02;
-
+      
       if (keys.has('Equal') || keys.has('+')) modelRef.current.scale.multiplyScalar(1.01);
       if (keys.has('Minus') || keys.has('-')) modelRef.current.scale.multiplyScalar(0.99);
-
+      
       if (keys.has('KeyR')) {
         modelRef.current.rotation.set(0, 0, 0);
       }
     }
   });
-
+  
   return (
-    <primitive
+    <primitive 
       ref={modelRef}
-      object={clone}
-      scale={Array.isArray(scale) ? scale : [scale, scale, scale]}
+      object={clone} 
+      scale={Array.isArray(scale) ? scale : [scale, scale, scale]} 
       dispose={null}
       key={key}
     />
   );
 }
-
-// En GltfViewer dentro del componente:
-const [loaderReady, setLoaderReady] = useState(false);
-
-// Dentro de handleZipFileUpload (al final del if (zipFiles) dentro de useEffect)
-setCustomLoader(true);
-setLoaderReady(true);
-
-// En el JSX donde se renderiza <Model /> dentro de <Canvas>
-{loaderReady && modelUrl && (
-  <Model url={modelUrl} scale={scale} zipFiles={zipFiles || undefined} />
-)}
 
 const GltfViewer = () => {
   const { toast } = useToast();
