@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, useLoader } from '@react-three/fiber';
 import { 
   OrbitControls, 
   Stage, 
@@ -9,7 +9,8 @@ import {
   PerspectiveCamera,
   ContactShadows,
   useProgress,
-  Html
+  Html,
+  useAnimations
 } from '@react-three/drei';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -21,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
-import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive, Play, Pause } from 'lucide-react';
 import * as THREE from 'three';
 import { extractZipFile, createZipResourceLoader, ExtractedFile } from '@/utils/zipUtils';
 
@@ -125,6 +126,10 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
   const [customLoader, setCustomLoader] = useState<boolean>(false);
   const modelRef = useRef<THREE.Group>(null);
   const originalFileLoader = useRef<typeof THREE.FileLoader.prototype.load | null>(null);
+  const [animationsExist, setAnimationsExist] = useState<boolean>(false);
+  const [animationPlaying, setAnimationPlaying] = useState<boolean>(true);
+  const [animationNames, setAnimationNames] = useState<string[]>([]);
+  const [currentAnimation, setCurrentAnimation] = useState<string>("");
   
   useEffect(() => {
     if (zipFiles && zipFiles.length > 0) {
@@ -188,6 +193,58 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
   const key = useMemo(() => zipFiles ? Math.random().toString() : url, [url, zipFiles]);
   
   const gltfResult = useGLTF(url);
+  const { animations } = gltfResult;
+  const { actions, names } = useAnimations(animations, modelRef);
+  
+  useEffect(() => {
+    if (animations && animations.length > 0) {
+      setAnimationsExist(true);
+      setAnimationNames(names);
+      
+      if (names.length > 0) {
+        const firstAnimation = names[0];
+        setCurrentAnimation(firstAnimation);
+        
+        if (actions[firstAnimation]) {
+          actions[firstAnimation].reset().play();
+          console.log(`Playing animation: ${firstAnimation}`);
+        }
+      }
+    } else {
+      setAnimationsExist(false);
+      setAnimationNames([]);
+      setCurrentAnimation("");
+    }
+  }, [animations, actions, names]);
+  
+  useEffect(() => {
+    if (currentAnimation && actions[currentAnimation]) {
+      if (animationPlaying) {
+        actions[currentAnimation].paused = false;
+        actions[currentAnimation].play();
+      } else {
+        actions[currentAnimation].paused = true;
+      }
+    }
+  }, [animationPlaying, currentAnimation, actions]);
+  
+  const handleAnimationChange = (animationName: string) => {
+    if (currentAnimation && actions[currentAnimation]) {
+      actions[currentAnimation].stop();
+    }
+    
+    setCurrentAnimation(animationName);
+    
+    if (actions[animationName]) {
+      actions[animationName].reset().play();
+      setAnimationPlaying(true);
+    }
+  };
+  
+  const toggleAnimation = () => {
+    setAnimationPlaying(!animationPlaying);
+  };
+  
   const clone = useMemo(() => gltfResult.scene.clone(), [gltfResult.scene]);
   
   useFrame(({ clock }) => {
@@ -207,13 +264,53 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
   });
   
   return (
-    <primitive 
-      ref={modelRef}
-      object={clone} 
-      scale={Array.isArray(scale) ? scale : [scale, scale, scale]} 
-      dispose={null}
-      key={key}
-    />
+    <>
+      <primitive 
+        ref={modelRef}
+        object={clone} 
+        scale={Array.isArray(scale) ? scale : [scale, scale, scale]} 
+        dispose={null}
+        key={key}
+      />
+      
+      {animationsExist && (
+        <Html position={[0, -2, 0]} center>
+          <div className="bg-white/80 backdrop-blur-sm p-3 rounded-md shadow-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="p-1 h-8 w-8" 
+                onClick={toggleAnimation}
+              >
+                {animationPlaying ? <Pause size={16} /> : <Play size={16} />}
+              </Button>
+              <span className="text-sm font-medium">
+                {animationPlaying ? "Pausar" : "Reproducir"} animación
+              </span>
+            </div>
+            
+            {animationNames.length > 1 && (
+              <Select 
+                value={currentAnimation}
+                onValueChange={handleAnimationChange}
+              >
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue placeholder="Seleccionar animación" />
+                </SelectTrigger>
+                <SelectContent>
+                  {animationNames.map((name) => (
+                    <SelectItem key={name} value={name} className="text-sm">
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        </Html>
+      )}
+    </>
   );
 }
 

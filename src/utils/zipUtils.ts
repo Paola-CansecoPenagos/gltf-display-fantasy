@@ -1,4 +1,5 @@
 
+import * as THREE from 'three';
 import JSZip from 'jszip';
 import { toast } from '@/hooks/use-toast';
 
