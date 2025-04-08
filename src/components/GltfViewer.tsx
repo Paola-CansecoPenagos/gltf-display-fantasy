@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree, useLoader } from '@react-three/fiber';
 import { 
@@ -22,12 +21,11 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { useToast } from '@/components/ui/use-toast';
+import { useToast } from '@/hooks/use-toast';
 import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive, Play, Pause, AlertCircle } from 'lucide-react';
 import * as THREE from 'three';
 import { extractZipFile, createZipResourceLoader, ExtractedFile } from '@/utils/zipUtils';
 
-// Constante para el tamaño máximo de archivo (en bytes)
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB como límite recomendado
 
 const PRESET_MODELS = [
@@ -138,7 +136,6 @@ class KeyboardControlsManager {
 
 const KeyboardControls = new KeyboardControlsManager();
 
-// Precarga modelos pequeños, evita precargar modelos grandes
 useGLTF.preload(PRESET_MODELS[0].url);
 
 function Model({ url, scale = 1, zipFiles, onError }: { 
@@ -215,10 +212,8 @@ function Model({ url, scale = 1, zipFiles, onError }: {
     };
   }, [zipFiles]);
   
-  // Generar una key única para forzar la remontada del modelo cuando cambie la URL
   const key = useMemo(() => zipFiles ? Math.random().toString() : url, [url, zipFiles]);
   
-  // Gestión de errores y carga del modelo con useGLTF
   let gltfResult;
   try {
     gltfResult = useGLTF(url);
@@ -406,7 +401,6 @@ const GltfViewer = () => {
       return;
     }
 
-    // Validar tamaño del archivo
     if (file.size > MAX_FILE_SIZE) {
       toast({
         title: "Archivo demasiado grande",
@@ -456,7 +450,6 @@ const GltfViewer = () => {
   }, [toast]);
   
   const handleFiles = useCallback((file: File) => {
-    // Validar tamaño del archivo
     if (file.size > MAX_FILE_SIZE) {
       toast({
         title: "Archivo demasiado grande",
@@ -598,7 +591,7 @@ const GltfViewer = () => {
       </ul>
     </div>
   );
-  
+
   return (
     <div className="gltf-viewer-container">
       <Canvas 
