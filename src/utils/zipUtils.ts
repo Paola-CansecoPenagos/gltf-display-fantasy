@@ -3,6 +3,9 @@ import * as THREE from 'three';
 import JSZip from 'jszip';
 import { toast } from '@/hooks/use-toast';
 
+// Constante para el tamaño máximo de archivo (en bytes)
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB como límite recomendado
+
 export interface ExtractedFile {
   name: string;
   path: string;
@@ -13,6 +16,16 @@ export interface ExtractedFile {
 
 export async function extractZipFile(file: File): Promise<ExtractedFile[] | null> {
   try {
+    // Verificar tamaño del archivo
+    if (file.size > MAX_FILE_SIZE) {
+      toast({
+        title: "Error",
+        description: `El archivo es demasiado grande (${(file.size / 1024 / 1024).toFixed(2)} MB). El tamaño máximo permitido es ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+        variant: "destructive"
+      });
+      return null;
+    }
+
     const zipInstance = new JSZip();
     const zipContent = await zipInstance.loadAsync(file);
     const extractedFiles: ExtractedFile[] = [];

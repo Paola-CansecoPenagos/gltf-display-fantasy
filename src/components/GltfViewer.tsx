@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useRef, Suspense, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree, useLoader } from '@react-three/fiber';
 import { 
@@ -22,9 +23,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
-import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive, Play, Pause } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Upload, X, Maximize, Minimize, Download, FileArchive, Play, Pause, AlertCircle } from 'lucide-react';
 import * as THREE from 'three';
 import { extractZipFile, createZipResourceLoader, ExtractedFile } from '@/utils/zipUtils';
+
+// Constante para el tamaño máximo de archivo (en bytes)
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB como límite recomendado
 
 const PRESET_MODELS = [
   {
@@ -75,6 +79,20 @@ function LoadingIndicator() {
   );
 }
 
+function ErrorDisplay({ error }: { error: string }) {
+  return (
+    <Html center>
+      <div className="bg-white p-4 rounded-md shadow-lg max-w-md">
+        <div className="flex items-center text-red-500 mb-2">
+          <AlertCircle className="mr-2" size={20} />
+          <h3 className="font-semibold">Error al cargar el modelo</h3>
+        </div>
+        <p className="text-sm text-gray-700">{error}</p>
+      </div>
+    </Html>
+  );
+}
+
 function CameraController() {
   const { camera } = useThree();
   
@@ -120,9 +138,15 @@ class KeyboardControlsManager {
 
 const KeyboardControls = new KeyboardControlsManager();
 
+// Precarga modelos pequeños, evita precargar modelos grandes
 useGLTF.preload(PRESET_MODELS[0].url);
 
-function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipFiles?: ExtractedFile[] }) {
+function Model({ url, scale = 1, zipFiles, onError }: { 
+  url: string, 
+  scale?: number, 
+  zipFiles?: ExtractedFile[],
+  onError?: (error: string) => void 
+}) {
   const [customLoader, setCustomLoader] = useState<boolean>(false);
   const modelRef = useRef<THREE.Group>(null);
   const originalFileLoader = useRef<typeof THREE.FileLoader.prototype.load | null>(null);
@@ -130,7 +154,8 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
   const [animationPlaying, setAnimationPlaying] = useState<boolean>(true);
   const [animationNames, setAnimationNames] = useState<string[]>([]);
   const [currentAnimation, setCurrentAnimation] = useState<string>("");
-  
+  const [hasError, setHasError] = useState<string>("");
+
   useEffect(() => {
     if (zipFiles && zipFiles.length > 0) {
       console.log("Setting up custom loader for ZIP files");
@@ -190,9 +215,25 @@ function Model({ url, scale = 1, zipFiles }: { url: string, scale?: number, zipF
     };
   }, [zipFiles]);
   
+  // Generar una key única para forzar la remontada del modelo cuando cambie la URL
   const key = useMemo(() => zipFiles ? Math.random().toString() : url, [url, zipFiles]);
   
-  const gltfResult = useGLTF(url);
+  // Gestión de errores y carga del modelo con useGLTF
+  let gltfResult;
+  try {
+    gltfResult = useGLTF(url);
+  } catch (error) {
+    console.error("Error loading GLTF model:", error);
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido al cargar el modelo";
+    setHasError(errorMessage);
+    if (onError) onError(errorMessage);
+    return <ErrorDisplay error={errorMessage} />;
+  }
+
+  if (hasError) {
+    return <ErrorDisplay error={hasError} />;
+  }
+
   const { animations } = gltfResult;
   const { actions, names } = useAnimations(animations, modelRef);
   
@@ -331,7 +372,9 @@ const GltfViewer = () => {
   const zipInputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [zipFiles, setZipFiles] = useState<ExtractedFile[] | null>(null);
-  
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelKey, setModelKey] = useState<string>('initial');
+
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -363,35 +406,66 @@ const GltfViewer = () => {
       return;
     }
 
-    console.log("Processing ZIP file:", file.name);
-    const extractedFiles = await extractZipFile(file);
-    if (!extractedFiles) return;
-
-    const gltfFile = extractedFiles.find(f => f.isGltf);
-    if (!gltfFile) {
+    // Validar tamaño del archivo
+    if (file.size > MAX_FILE_SIZE) {
       toast({
-        title: "Error",
-        description: "No se encontraron archivos GLTF o GLB en el ZIP",
+        title: "Archivo demasiado grande",
+        description: `El archivo es demasiado grande (${(file.size / 1024 / 1024).toFixed(2)} MB). El tamaño máximo permitido es ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
         variant: "destructive"
       });
       return;
     }
 
-    setZipFiles(extractedFiles);
-    
-    setTimeout(() => {
-      setModelUrl(gltfFile.url.href);
-      setModelInfo(`Modelo desde ZIP: ${file.name} - ${gltfFile.name}`);
+    console.log("Processing ZIP file:", file.name);
+    try {
+      const extractedFiles = await extractZipFile(file);
+      if (!extractedFiles) return;
+
+      const gltfFile = extractedFiles.find(f => f.isGltf);
+      if (!gltfFile) {
+        toast({
+          title: "Error",
+          description: "No se encontraron archivos GLTF o GLB en el ZIP",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      setZipFiles(extractedFiles);
       
+      setTimeout(() => {
+        setModelError(null);
+        setModelUrl(gltfFile.url.href);
+        setModelInfo(`Modelo desde ZIP: ${file.name} - ${gltfFile.name}`);
+        setModelKey(Math.random().toString()); // Forzar remontada del modelo
+        
+        toast({
+          title: "Modelo ZIP cargado",
+          description: `Se encontraron ${extractedFiles.length} archivos, usando ${gltfFile.name}`,
+        });
+      }, 300);
+    } catch (error) {
+      console.error("Error processing ZIP file:", error);
       toast({
-        title: "Modelo ZIP cargado",
-        description: `Se encontraron ${extractedFiles.length} archivos, usando ${gltfFile.name}`,
+        title: "Error al procesar ZIP",
+        description: "No se pudo extraer el archivo ZIP correctamente",
+        variant: "destructive"
       });
-    }, 300);
+    }
     
   }, [toast]);
   
   const handleFiles = useCallback((file: File) => {
+    // Validar tamaño del archivo
+    if (file.size > MAX_FILE_SIZE) {
+      toast({
+        title: "Archivo demasiado grande",
+        description: `El archivo es demasiado grande (${(file.size / 1024 / 1024).toFixed(2)} MB). El tamaño máximo permitido es ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+        variant: "destructive"
+      });
+      return;
+    }
+
     if (file.name.endsWith('.zip')) {
       handleZipFileUpload(file);
       return;
@@ -408,14 +482,25 @@ const GltfViewer = () => {
     
     setZipFiles(null);
     
-    const url = URL.createObjectURL(file);
-    setModelUrl(url);
-    setModelInfo(`Modelo: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
-    
-    toast({
-      title: "Modelo cargado",
-      description: `${file.name} se ha cargado correctamente`,
-    });
+    try {
+      const url = URL.createObjectURL(file);
+      setModelUrl(url);
+      setModelInfo(`Modelo: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+      setModelError(null);
+      setModelKey(Math.random().toString()); // Forzar remontada del modelo
+      
+      toast({
+        title: "Modelo cargado",
+        description: `${file.name} se ha cargado correctamente`,
+      });
+    } catch (error) {
+      console.error("Error creating object URL:", error);
+      toast({
+        title: "Error al cargar modelo",
+        description: "No se pudo cargar el archivo correctamente",
+        variant: "destructive"
+      });
+    }
   }, [toast, handleZipFileUpload]);
   
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -432,6 +517,8 @@ const GltfViewer = () => {
       setZipFiles(null);
       setModelUrl(urlInput);
       setModelInfo(`Modelo: URL externa`);
+      setModelError(null);
+      setModelKey(Math.random().toString()); // Forzar remontada del modelo
       toast({
         title: "Modelo cargado",
         description: "El modelo se ha cargado desde la URL",
@@ -449,6 +536,8 @@ const GltfViewer = () => {
     setZipFiles(null);
     setModelUrl(model.url);
     setModelInfo(`Modelo: ${model.name}`);
+    setModelError(null);
+    setModelKey(Math.random().toString()); // Forzar remontada del modelo
     toast({
       title: "Modelo cargado",
       description: `${model.name} se ha cargado correctamente`,
@@ -466,10 +555,21 @@ const GltfViewer = () => {
     setShowShadows(true);
     setAutoRotate(false);
     setScale(1);
+    setModelError(null);
+    setModelKey(Math.random().toString()); // Forzar remontada del modelo
     
     toast({
       title: "Visor reiniciado",
       description: "Todas las configuraciones se han restablecido",
+    });
+  }, [toast]);
+  
+  const handleModelError = useCallback((error: string) => {
+    setModelError(error);
+    toast({
+      title: "Error al cargar modelo",
+      description: error,
+      variant: "destructive"
     });
   }, [toast]);
   
@@ -502,6 +602,7 @@ const GltfViewer = () => {
   return (
     <div className="gltf-viewer-container">
       <Canvas 
+        key={modelKey}
         style={{ background: backgroundColor }}
         camera={{ position: [5, 5, 5], fov: 50 }}
         shadows
@@ -509,7 +610,14 @@ const GltfViewer = () => {
         <Suspense fallback={<LoadingIndicator />}>
           <Environment preset={environmentPreset as any} background={false} />
           
-          <Model url={modelUrl} scale={scale} zipFiles={zipFiles || undefined} />
+          {!modelError && (
+            <Model 
+              url={modelUrl} 
+              scale={scale} 
+              zipFiles={zipFiles || undefined} 
+              onError={handleModelError}
+            />
+          )}
           
           <CameraController />
           
@@ -561,6 +669,13 @@ const GltfViewer = () => {
                   <CardTitle>Cargar modelo</CardTitle>
                 </CardHeader>
                 <CardContent>
+                  <div className="mb-3 p-3 bg-yellow-50 border border-yellow-300 rounded-md text-sm">
+                    <p className="flex items-center">
+                      <AlertCircle size={16} className="text-yellow-500 mr-2" />
+                      <span>Tamaño máximo recomendado: {MAX_FILE_SIZE / 1024 / 1024} MB</span>
+                    </p>
+                  </div>
+                  
                   <div 
                     className={`dropzone ${dragActive ? 'active' : ''}`}
                     onDragEnter={handleDrag}
